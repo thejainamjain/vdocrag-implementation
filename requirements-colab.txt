@@ -1,0 +1,21 @@
+# Core
+torch>=2.2.0
+transformers>=4.49.0
+accelerate>=0.33.0
+bitsandbytes>=0.43.0
+
+# Retrieval (ColQwen2.5 / ColBERT-style multi-vector)
+colpali-engine>=0.3.7
+
+# Generation (Qwen2.5-VL chat-template helper)
+qwen-vl-utils>=0.0.8
+
+# Ingestion
+pdf2image>=1.17.0
+Pillow>=10.0.0
+
+# UI (replaces Gradio)
+streamlit>=1.38.0
+
+# Dev
+pytest>=8.0.0

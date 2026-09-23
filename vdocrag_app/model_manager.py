@@ -6,9 +6,18 @@ Unlike Path A (Phi-3-vision), these are two genuinely different model
 architectures (ColQwen2.5 is a Qwen2.5-VL-3B backbone + a ColBERT-style
 projection head; the generator is a separate Qwen2.5-VL-7B) -- there is no
 single shared base model to hot-swap LoRA adapters on top of, so both are
-just loaded independently. This is expected to still comfortably fit a T4
-given the ~7-8GB combined 4-bit weight estimate (see config.py) -- NOT yet
-confirmed on real hardware.
+just loaded independently.
+
+The primary and fallback pairs are architecturally distinct, not just
+differently-sized: ColQwen2.5/Qwen2.5-VL vs. ColQwen2/Qwen2-VL are separate
+model classes in colpali_engine/transformers with structurally different
+vision towers, so `load()` picks the matching class pair per `use_fallback`
+rather than hardcoding one pair's classes for both. The ~7-8GB combined
+4-bit weight estimate for the primary pair (see config.py) was optimistic --
+confirmed on real free-tier-Colab-T4 hardware to be slow to download/quantize
+(~20GB of full-precision weights fetched before quantization even starts).
+If you're VRAM- or time-constrained, prefer the fallback pair outright rather
+than treating it as a rare escape hatch.
 """
 
 import logging
@@ -66,26 +75,44 @@ class ModelManager:
 
         retriever_id = config.FALLBACK_RETRIEVER_MODEL_ID if self.use_fallback else config.RETRIEVER_MODEL_ID
         generator_id = config.FALLBACK_GENERATOR_MODEL_ID if self.use_fallback else config.GENERATOR_MODEL_ID
+        compute_dtype = getattr(torch, config.QuantConfig().bnb_4bit_compute_dtype_name)
 
         logger.info(f"Loading retriever: {retriever_id}")
-        from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+        if self.use_fallback:
+            # vidore/colqwen2-v1.0 is a ColQwen2 (Qwen2-VL backbone) checkpoint --
+            # NOT ColQwen2.5. Loading it with the ColQwen2_5 class produces
+            # missing/unexpected-key or shape-mismatch errors: the two
+            # architectures' vision towers differ structurally.
+            from colpali_engine.models import ColQwen2, ColQwen2Processor
+            retriever_cls, retriever_processor_cls = ColQwen2, ColQwen2Processor
+        else:
+            from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+            retriever_cls, retriever_processor_cls = ColQwen2_5, ColQwen2_5_Processor
 
-        self.retriever_model = ColQwen2_5.from_pretrained(
+        self.retriever_model = retriever_cls.from_pretrained(
             retriever_id,
             quantization_config=_bnb_config(),
-            torch_dtype=torch.bfloat16,
+            torch_dtype=compute_dtype,
             device_map="cuda:0",
         ).eval()
-        self.retriever_processor = ColQwen2_5_Processor.from_pretrained(retriever_id)
+        self.retriever_processor = retriever_processor_cls.from_pretrained(retriever_id)
         logger.info("Retriever loaded.")
 
         logger.info(f"Loading generator: {generator_id}")
-        from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+        from transformers import AutoProcessor
+        if self.use_fallback:
+            # Qwen/Qwen2-VL-2B-Instruct needs Qwen2VLForConditionalGeneration --
+            # a genuinely different transformers class/config from Qwen2.5-VL's.
+            from transformers import Qwen2VLForConditionalGeneration
+            generator_cls = Qwen2VLForConditionalGeneration
+        else:
+            from transformers import Qwen2_5_VLForConditionalGeneration
+            generator_cls = Qwen2_5_VLForConditionalGeneration
 
-        self.generator_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        self.generator_model = generator_cls.from_pretrained(
             generator_id,
             quantization_config=_bnb_config(),
-            torch_dtype=torch.bfloat16,
+            torch_dtype=compute_dtype,
             device_map="cuda:0",
         ).eval()
         self.generator_processor = AutoProcessor.from_pretrained(generator_id)

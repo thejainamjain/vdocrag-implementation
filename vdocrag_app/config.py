@@ -39,5 +39,12 @@ MAX_NEW_TOKENS = 128
 class QuantConfig:
     load_in_4bit: bool = True
     bnb_4bit_quant_type: str = "nf4"
-    bnb_4bit_compute_dtype_name: str = "bfloat16"
+    # float16, not bfloat16: T4 (Turing, compute capability 7.5) has no native
+    # bf16 tensor cores -- those are Ampere+ (8.0+) only. bf16 still "works" on
+    # a T4 but runs unaccelerated, which slows down both quantization at load
+    # time and every forward pass after. float16 uses T4's actual fast path.
+    # If you're running on an Ampere+ GPU (A100, etc.), bfloat16 is preferable
+    # for its wider dynamic range -- change this back in that case.
+    bnb_4bit_compute_dtype_name: str = "float16"
     bnb_4bit_use_double_quant: bool = True
+    

@@ -53,6 +53,17 @@ class ModelManager:
 
         import torch
 
+        if not torch.cuda.is_available():
+            reason = "torch was not built with CUDA support" if not torch.backends.cuda.is_built() \
+                else "no CUDA GPU is visible to this process"
+            raise RuntimeError(
+                f"No usable GPU found ({reason}). In Colab: Runtime > Change runtime "
+                "type > Hardware accelerator > select a GPU (e.g. T4) > Save, then "
+                "Runtime > Restart session and re-run all cells from the top. This "
+                "app loads two multi-billion-parameter models 4-bit-quantized via "
+                "bitsandbytes, which requires CUDA -- it will not run on CPU."
+            )
+
         retriever_id = config.FALLBACK_RETRIEVER_MODEL_ID if self.use_fallback else config.RETRIEVER_MODEL_ID
         generator_id = config.FALLBACK_GENERATOR_MODEL_ID if self.use_fallback else config.GENERATOR_MODEL_ID
 

@@ -21,10 +21,22 @@ than treating it as a rare escape hatch.
 """
 
 import logging
+import os
 
 from . import config
 
 logger = logging.getLogger("vdocrag")
+
+# Must be set before torch initializes a CUDA context (this module is the
+# first thing in the app that imports torch, so import-time is early enough).
+# Directly addresses the fragmentation note in PyTorch's own OOM message
+# ("If reserved but unallocated memory is large try setting
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True") -- lets the allocator
+# grow/shrink existing memory segments instead of only ever grabbing new ones,
+# which matters a lot on a VRAM-tight T4 running two quantized models plus
+# variable-length multi-image generation calls back to back. setdefault, not
+# a hard overwrite, so it doesn't clobber a value set in the Colab notebook.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def _bnb_config():
@@ -93,6 +105,7 @@ class ModelManager:
             retriever_id,
             quantization_config=_bnb_config(),
             torch_dtype=compute_dtype,
+            attn_implementation=config.ATTN_IMPLEMENTATION,
             device_map="cuda:0",
         ).eval()
         self.retriever_processor = retriever_processor_cls.from_pretrained(retriever_id)
@@ -113,10 +126,28 @@ class ModelManager:
             generator_id,
             quantization_config=_bnb_config(),
             torch_dtype=compute_dtype,
+            attn_implementation=config.ATTN_IMPLEMENTATION,
             device_map="cuda:0",
         ).eval()
-        self.generator_processor = AutoProcessor.from_pretrained(generator_id)
+        # min/max_pixels caps per-image vision tokens (see config.py) -- the
+        # generator's own default is unbounded (4-16384 tokens/image), which
+        # is what actually caused the CUDA OOM during generate(), not model
+        # loading. Only applied to the generator: the retriever's checkpoint
+        # already ships a sane built-in cap.
+        self.generator_processor = AutoProcessor.from_pretrained(
+            generator_id,
+            min_pixels=config.GENERATOR_MIN_PIXELS,
+            max_pixels=config.GENERATOR_MAX_PIXELS,
+        )
         logger.info("Generator loaded.")
+
+        # Loading + 4-bit quantizing two models leaves the CUDA caching
+        # allocator holding a bunch of now-freed temporary buffers as
+        # reserved-but-unallocated fragments. Compact that now, once, rather
+        # than let the first generate() call be the one that discovers
+        # there's no contiguous block big enough despite the memory
+        # technically being free.
+        torch.cuda.empty_cache()
 
         self._loaded = True
         return self

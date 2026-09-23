@@ -23,7 +23,9 @@ class Generator:
         self._mm = model_manager
         self.max_new_tokens = max_new_tokens
 
-    @torch.no_grad()
+    @torch.inference_mode()  # stricter/lighter-weight than no_grad -- skips
+    # version-counter bookkeeping torch otherwise does per-tensor, since
+    # inference_mode guarantees nothing here ever needs autograd.
     def answer(self, question: str, images: List[Image.Image]) -> str:
         from qwen_vl_utils import process_vision_info
 
@@ -58,4 +60,13 @@ class Generator:
         )
         answer = output_text[0].strip()
         logger.info(f"Generated answer ({len(images)} images, {len(answer)} chars)")
+
+        # Free this call's prefill KV cache and activation buffers now rather
+        # than leaving them for the allocator to reclaim lazily -- on a
+        # VRAM-tight GPU, the NEXT query (different image count -> different
+        # sequence length) benefits from starting from a clean, defragmented
+        # state instead of fitting around this call's leftover reserved blocks.
+        del inputs, generated_ids, generated_ids_trimmed
+        torch.cuda.empty_cache()
+
         return answer

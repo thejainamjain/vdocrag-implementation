@@ -34,6 +34,30 @@ TOP_K = 3  # paper's own reported sweet spot for k (unlike Path A, no known
 
 MAX_NEW_TOKENS = 128
 
+# Vision-token cap for the GENERATOR (Qwen2.5-VL). Its own default range is
+# 4-16384 tokens PER IMAGE, uncapped -- with TOP_K=3 full-DPI page images
+# that's easily tens of thousands of vision tokens in one prompt, which is
+# what actually blew the VRAM budget during generate() (confirmed: the OOM
+# traceback's failing allocation was inside attention over that sequence,
+# not model loading). This range (256-1280 tokens/image) is transformers'
+# own documented memory-saving recommendation -- still legible for reading
+# text-heavy document scans, just no longer unbounded. The RETRIEVER
+# (ColQwen2.5) doesn't need this: its checkpoint already ships a sane
+# built-in cap (max_pixels tuned for ~768 patches, per the model card).
+GENERATOR_MIN_PIXELS = 256 * 28 * 28
+GENERATOR_MAX_PIXELS = 1280 * 28 * 28
+
+# Memory-efficient attention kernel (SDPA -- fused, doesn't materialize the
+# full O(n^2) attention score matrix the way "eager" does). Explicit rather
+# than relying on the library's auto-selection default. flash_attention_2
+# would be even more memory-efficient for this multi-image case per Qwen's
+# own docs, but isn't set by default here since it requires a separate
+# `pip install flash-attn` with a build step that isn't guaranteed to have a
+# prebuilt wheel for Colab's exact CUDA/torch/Python combo -- worth trying
+# by hand if you need more headroom, not defaulted to avoid breaking the
+# install for people it doesn't have a wheel for.
+ATTN_IMPLEMENTATION = "sdpa"
+
 
 @dataclass
 class QuantConfig:

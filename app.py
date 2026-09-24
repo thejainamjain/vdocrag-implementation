@@ -30,10 +30,32 @@ IMAGES_DIR = os.path.join(DATA_DIR, "images")
 st.set_page_config(page_title="VDocRAG demo (Path B)", layout="wide")
 
 
-@st.cache_resource(show_spinner="Loading models (first run only, ~1-2 min)...")
 def get_model_manager(use_fallback: bool) -> ModelManager:
-    mm = ModelManager(use_fallback=use_fallback)
-    mm.load()
+    """Manually cached in session_state (not st.cache_resource) because
+    st.cache_resource keys on the use_fallback argument -- it would keep a
+    separate cached entry per True/False, so toggling the sidebar checkbox
+    would try to load a SECOND full set of models on top of whichever pair
+    is already loaded, rather than replacing it. On a VRAM-constrained GPU
+    that's an immediate, worse OOM during the load itself. This instead
+    explicitly frees the previously-loaded pair before loading the new one.
+    """
+    current = st.session_state.get("model_manager")
+    if current is not None and current.use_fallback == use_fallback:
+        return current
+
+    if current is not None:
+        del current.retriever_model, current.retriever_processor
+        del current.generator_model, current.generator_processor
+        del st.session_state["model_manager"]
+        import gc
+        import torch
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    with st.spinner("Loading models (switching pairs frees the previous one first)..."):
+        mm = ModelManager(use_fallback=use_fallback)
+        mm.load()
+    st.session_state["model_manager"] = mm
     return mm
 
 
@@ -63,18 +85,21 @@ index = get_index()
 tab_upload, tab_ask = st.tabs(["Upload & Index", "Ask"])
 
 with tab_upload:
-    st.subheader("Upload a PDF")
-    uploaded = st.file_uploader("PDF file", type=["pdf"])
+    st.subheader("Upload a PDF or image")
+    uploaded = st.file_uploader(
+        "PDF or image file",
+        type=["pdf", "jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif"],
+    )
 
-    if uploaded is not None and st.button("Index this PDF"):
+    if uploaded is not None and st.button("Index this file"):
         source_name = uploaded.name
         tmp_path = os.path.join(DATA_DIR, source_name)
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(tmp_path, "wb") as f:
             f.write(uploaded.getbuffer())
 
-        with st.spinner("Rasterizing PDF..."):
-            pages = ingest.pdf_to_images(tmp_path)
+        with st.spinner("Loading pages..."):
+            pages = ingest.file_to_images(tmp_path)
             image_paths = ingest.save_page_images(pages, IMAGES_DIR, source_name)
 
         index.remove_source(source_name)  # re-indexing replaces previous pages for this file
@@ -122,3 +147,4 @@ with tab_ask:
             for col, record in zip(cols, retrieved):
                 with col:
                     st.image(record.image_path, caption=f"{record.source} -- page {record.page_number}")
+                    

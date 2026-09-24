@@ -22,14 +22,14 @@ class Retriever:
     def __init__(self, model_manager):
         self._mm = model_manager
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def encode_query(self, query: str) -> torch.Tensor:
         model, processor = self._mm.use_retriever()
         batch = processor.process_queries([query]).to(model.device)
         embedding = model(**batch)
         return embedding[0].to("cpu")  # (num_query_tokens, dim)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def encode_document(self, image: Image.Image) -> torch.Tensor:
         """One image at a time (see index.py for why) -- returns a single
         page's multi-vector embedding, shape (num_patches, dim)."""

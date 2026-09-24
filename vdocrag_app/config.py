@@ -71,4 +71,3 @@ class QuantConfig:
     # for its wider dynamic range -- change this back in that case.
     bnb_4bit_compute_dtype_name: str = "float16"
     bnb_4bit_use_double_quant: bool = True
-    

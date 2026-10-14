@@ -100,6 +100,23 @@ def cache_path(cache_dir: str, doc_id: str) -> str:
     return os.path.join(cache_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", doc_id) + ".npy")
 
 
+def ensure_hf_token():
+    """OpenDocVQA-Corpus is gated, so an unauthenticated run dies with a
+    confusing 'gated dataset' error AFTER downloading other things. Fail fast
+    with the actual fix instead. NOTE: Colab's userdata.get() only works in the
+    notebook kernel, not in a `!python -m ...` subprocess -- so the token must
+    be exported to the environment from a notebook cell BEFORE launching."""
+    from huggingface_hub import get_token
+    if not (os.environ.get("HF_TOKEN") or get_token()):
+        raise SystemExit(
+            "No Hugging Face token visible to this process (needed for the gated "
+            "OpenDocVQA-Corpus). In a notebook cell, run first:\n"
+            "    import os; from google.colab import userdata\n"
+            "    os.environ['HF_TOKEN'] = userdata.get('HF_TOKEN')\n"
+            "then re-run this command in the SAME runtime (a restarted runtime loses it)."
+        )
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="chartqa")
@@ -118,6 +135,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    ensure_hf_token()
 
     qa = load_dataset("NTT-hil-insight/OpenDocVQA", args.config, split="test")
     qa = qa.select(range(min(args.max_questions, len(qa))))
